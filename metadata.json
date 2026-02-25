@@ -1,0 +1,5 @@
+{
+  "name": "Zipline Sag Calculator",
+  "description": "A technical tool for calculating and visualizing zipline rope sag under various load conditions for rope parks.",
+  "requestFramePermissions": []
+}
