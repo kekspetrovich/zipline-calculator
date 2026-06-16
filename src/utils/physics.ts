@@ -5,6 +5,7 @@
 export interface Point {
   x: number;
   y: number;
+  v?: number; // m/s (used in dynamics)
   speed?: number; // m/s
   speedNoWind?: number; // m/s
   t?: number;
@@ -139,6 +140,8 @@ export interface ZiplineResults {
   ptsNW: Point[]; // Travel path without wind
   ptsW40: Point[]; // Travel path for 40kg rider
   ptsW120: Point[]; // Travel path for 120kg rider
+  ptsAero: Point[]; // Travel path with gravity + drag (no friction)
+  ptsIdeal: Point[]; // Travel path with gravity ONLY
   
   reactions: {
     start: { horizontal: number; vertical: number };
@@ -179,7 +182,6 @@ export const simulateZipline = (input: ZiplineInput): ZiplineResults => {
   const adjustedTensionNewtons = (input.tensionKg * g) * (1 - alpha * deltaT * 100);
 
   const q = input.ropeWeight * g;
-  const ropeDiaM = input.ropeDiameter / 1000;
   const rho = calculateAirDensity(input.altitude, input.temperature, input.humidity);
   
   // Sheave friction parameters
@@ -195,7 +197,6 @@ export const simulateZipline = (input: ZiplineInput): ZiplineResults => {
   const c_damp = 0.00025 * q * Math.sqrt(g * span); // Cable vibration damping
 
   // Helper equations for cable shape
-  // Parabolic approximation of a catenary under self-weight + single point load
   const getCableY = (x: number, riderX: number, riderWeightKg: number) => {
     const s = x / span;
     const yStraight = input.hStart - s * drop;
@@ -222,9 +223,6 @@ export const simulateZipline = (input: ZiplineInput): ZiplineResults => {
     return (getCableY(x2, riderX, riderWeightKg) - getCableY(x1, riderX, riderWeightKg)) / (x2 - x1);
   };
 
-  // Curvature radius: R = (1 + y'^2)^1.5 / |y''|
-  // For the trolley path (where riderX = x), y(x) = yStart - (H/L)x - K*x*(L-x)
-  // y'' = 2*K where K = q / (2*T) + P / (T*L)
   const getCurvatureRadius = (x: number, riderWeightKg: number) => {
     const P = (riderWeightKg + 2) * g;
     const K = q / (2 * adjustedTensionNewtons) + P / (adjustedTensionNewtons * span);
@@ -259,37 +257,25 @@ export const simulateZipline = (input: ZiplineInput): ZiplineResults => {
     const N_steps = 300;
     const dx_sample = span / N_steps;
     
-    // Net acceleration function
     const getAccel = (x: number, v: number): number => {
       const xc = Math.max(0, Math.min(x, span));
-      const yp = getCableSlope(xc, xc, mRider); // Slope of the trolley path
+      const yp = getCableSlope(xc, xc, mRider); 
       const theta = Math.atan(yp);
       const sinT = Math.sin(theta);
       const cosT = Math.cos(theta);
       const R_curv = getCurvatureRadius(xc, mRider);
 
-      // 1. Gravity along cable
       const Fg = mTotal * g * sinT;
-
-      // 2. Centripetal force
       const Fcentripetal = mTotal * v * v / R_curv;
-
-      // 3. Normal force
       const Fnormal = mTotal * g * Math.abs(cosT) + Fcentripetal;
 
-      // 4. Rolling friction
       const mu_rolling = sheaveFriction < 0.08 ? 0.001 : 0.002;
       const mu_bearing_loss = 0.002 * (10 / Math.max(sheaveDiaAvgM * 1000, 5));
       const Froll = (mu_rolling + mu_bearing_loss) * Fnormal;
-
-      // 5. Bearing radial friction loss
       const Feta = (1 - eta) * Math.abs(Fg);
-
-      // 6. Wrap angle loss
       const wrapAngle = Math.min(Fnormal / Math.max(adjustedTensionNewtons, 500), 0.1);
       const Fwrap = mu_rolling * wrapAngle * Fnormal;
 
-      // 7. Aerodynamic drag
       let Fd_rider = 0;
       if (useWind) {
         const Vrel_along = v + headwind;
@@ -299,9 +285,7 @@ export const simulateZipline = (input: ZiplineInput): ZiplineResults => {
         Fd_rider = 0.5 * rho * CdA * v * v;
       }
 
-      // 8. Cable vibration damping
       const Fvibration = c_damp * v * 0.05;
-
       const vSign = v > 0.001 ? 1 : (v < -0.001 ? -1 : 0);
       const F_resist = (Froll + Feta + Fwrap + Fvibration) * vSign + Fd_rider;
 
@@ -309,46 +293,28 @@ export const simulateZipline = (input: ZiplineInput): ZiplineResults => {
     };
 
     const pts: Point[] = [{ x: 0, y: getCableY(0, 0, mRider), v: 0, t: 0 }];
-    let x = 0;
-    let v = 0;
-    let t = 0;
-    const dt = 0.005;
-    const maxIter = 100000;
+    let x = 0, v = 0, t = 0;
+    const dt = 0.005, maxIter = 100000;
     let iter = 0;
 
     while (x < span && iter < maxIter) {
       iter++;
-      
-      // RK4 step
-      const k1v = getAccel(x, v);
-      const k1x = Math.max(v, 0);
-
-      const k2v = getAccel(x + 0.5 * dt * k1x, Math.max(v + 0.5 * dt * k1v, 0));
-      const k2x = Math.max(v + 0.5 * dt * k1v, 0);
-
-      const k3v = getAccel(x + 0.5 * dt * k2x, Math.max(v + 0.5 * dt * k2v, 0));
-      const k3x = Math.max(v + 0.5 * dt * k2v, 0);
-
-      const k4v = getAccel(x + dt * k3x, Math.max(v + dt * k3v, 0));
-      const k4x = Math.max(v + dt * k3v, 0);
-
+      const k1v = getAccel(x, v); const k1x = Math.max(v, 0);
+      const k2v = getAccel(x + 0.5 * dt * k1x, Math.max(v + 0.5 * dt * k1v, 0)); const k2x = Math.max(v + 0.5 * dt * k1v, 0);
+      const k3v = getAccel(x + 0.5 * dt * k2x, Math.max(v + 0.5 * dt * k2v, 0)); const k3x = Math.max(v + 0.5 * dt * k2v, 0);
+      const k4v = getAccel(x + dt * k3x, Math.max(v + dt * k3v, 0)); const k4x = Math.max(v + dt * k3v, 0);
       v = Math.max(v + (dt / 6) * (k1v + 2 * k2v + 2 * k3v + k4v), 0);
       x = Math.max(x + (dt / 6) * (k1x + 2 * k2x + 2 * k3x + k4x), x);
       t += dt;
-
-      // Check if rider stopped
       if (v <= 0.001 && t > 2) {
         pts.push({ x, y: getCableY(x, x, mRider), v: 0, t, stopped: true });
         break;
       }
-
-      // Sample path
       const lp = pts[pts.length - 1];
       if (x - lp.x >= dx_sample || x >= span) {
         pts.push({ x: Math.min(x, span), y: getCableY(Math.min(x, span), Math.min(x, span), mRider), v, t });
       }
     }
-
     const lp = pts[pts.length - 1];
     if (lp.x < span && !lp.stopped) {
       pts.push({ x: span, y: getCableY(span, span, mRider), v: lp.v, t: lp.t });
@@ -359,96 +325,62 @@ export const simulateZipline = (input: ZiplineInput): ZiplineResults => {
   // Run simulations
   const travelProfile = simulateRider(input.riderMass, input.dragArea, true);
   const ptsNW = simulateRider(input.riderMass, input.dragArea, false);
-  const ptsW40 = simulateRider(40, 0.4, true); // standard 40kg rider
-  const ptsW120 = simulateRider(120, 0.8, true); // standard 120kg rider
+  const ptsW40 = simulateRider(40, 0.4, true); 
+  const ptsW120 = simulateRider(120, 0.8, true); 
 
-  // Compute key stats
-  const maxV = Math.max(...travelProfile.map(p => p.v || 0));
-  const maxVNW = Math.max(...ptsNW.map(p => p.v || 0));
-  const finishV = travelProfile[travelProfile.length - 1].stopped ? 0 : (travelProfile[travelProfile.length - 1].v || 0);
-  const finishVNW = ptsNW[ptsNW.length - 1].stopped ? 0 : (ptsNW[ptsNW.length - 1].v || 0);
-  
-  let totalTime = travelProfile[travelProfile.length - 1].t || 0;
-  let totalTimeNoWind = ptsNW[ptsNW.length - 1].t || 0;
-  
-  // Average speed calculation (weighted by distance)
-  let distSum = 0;
-  let vdSum = 0;
-  for (let i = 0; i < travelProfile.length - 1; i++) {
-    const dxi = travelProfile[i + 1].x - travelProfile[i].x;
-    const vAvg = ((travelProfile[i].v || 0) + (travelProfile[i + 1].v || 0)) / 2;
-    distSum += dxi;
-    vdSum += vAvg * dxi;
-  }
-  const avgSpeed = distSum > 0 ? vdSum / distSum : 0;
-
-  // Position of max speed
-  let maxVx = 0;
-  for (const p of travelProfile) {
-    if ((p.v || 0) >= maxV - 0.01) {
-      maxVx = p.x;
-      break;
-    }
-  }
-
-  // Calculate anchor forces (using standard vector mechanics of loaded cables)
-  const Rh = adjustedTensionNewtons;
-  // Slopes at anchors with load at loadPositionX
-  const slopeStart = getCableSlope(0.01, input.loadPositionX, input.riderMass);
-  const slopeEnd = getCableSlope(span - 0.01, input.loadPositionX, input.riderMass);
-  const angleStart = Math.atan(slopeStart);
-  const angleEnd = Math.atan(-slopeEnd);
-
-  const reactions = {
-    start: {
-      horizontal: Rh / g,
-      vertical: Math.abs(Rh * Math.tan(angleStart)) / g
-    },
-    end: {
-      horizontal: Rh / g,
-      vertical: Math.abs(Rh * Math.tan(angleEnd)) / g
-    }
-  };
-
-  const maxTensionNewtons = Math.max(
-    Rh / Math.cos(angleStart),
-    Rh / Math.cos(angleEnd)
-  );
-
-  const safetyFactor = (input.ropeBreakingLoadKn * 1000) / Math.max(maxTensionNewtons, 1);
-
-  return {
-    points,
-    unloadedPoints,
-    travelProfile,
-    ptsNW,
-    ptsW40,
-    ptsW120,
-    reactions,
-    maxTensionNewtons,
-    safetyFactor,
-    cableLength,
-    maxSpeed: maxV,
-    maxSpeedNoWind: maxVNW,
-    finishSpeed: finishV,
-    finishSpeedNoWind: finishVNW,
-    avgSpeed,
-    totalTime,
-    totalTimeNoWind,
-    maxVx
-  };
-};
-al(x + dt * k3x); const k4x = Math.max(v + dt * k3v, 0);
+  // Aero-only: gravity + drag, NO friction
+  const ptsAero = (() => {
+    const m = input.riderMass + 2, CdA = input.dragArea;
+    const getAccelAero = (x: number, v: number) => {
+      const xc = Math.max(0, Math.min(x, span));
+      const yp = getCableSlope(xc, xc, input.riderMass);
+      const theta = Math.atan(yp);
+      const Fg = m * g * Math.sin(theta);
+      const Fd = 0.5 * rho * CdA * v * v;
+      return (Fg - (v > 0.001 ? Fd : 0)) / m;
+    };
+    const pts: Point[] = [{ x: 0, y: getCableY(0, 0, input.riderMass), v: 0, t: 0 }];
+    let x = 0, v = 0, t = 0, dt = 0.005, iter = 0;
+    while (x < span && iter < 100000) {
+      iter++;
+      const k1v = getAccelAero(x, v); const k1x = Math.max(v, 0);
+      const k2v = getAccelAero(x + 0.5 * dt * k1x, Math.max(v + 0.5 * dt * k1v, 0)); const k2x = Math.max(v + 0.5 * dt * k1v, 0);
+      const k3v = getAccelAero(x + 0.5 * dt * k2x, Math.max(v + 0.5 * dt * k2v, 0)); const k3x = Math.max(v + 0.5 * dt * k2v, 0);
+      const k4v = getAccelAero(x + dt * k3x, Math.max(v + dt * k3v, 0)); const k4x = Math.max(v + dt * k3v, 0);
       v = Math.max(v + (dt / 6) * (k1v + 2 * k2v + 2 * k3v + k4v), 0);
       x = Math.max(x + (dt / 6) * (k1x + 2 * k2x + 2 * k3x + k4x), x);
       t += dt;
+      if (v <= 0.001 && t > 2) break;
       const lp = pts[pts.length - 1];
-      if (x - lp.x >= (span / 300) || x >= span) pts.push({ x: Math.min(x, span), v, t });
+      if (x - lp.x >= (span / 300) || x >= span) pts.push({ x: Math.min(x, span), y: getCableY(Math.min(x, span), Math.min(x, span), input.riderMass), v, t });
     }
     return pts;
   })();
 
-  // Compute key stats
+  // Ideal: gravity ONLY
+  const ptsIdeal = (() => {
+    const getAccelIdeal = (x: number) => {
+      const xc = Math.max(0, Math.min(x, span));
+      const yp = getCableSlope(xc, xc, input.riderMass);
+      return g * Math.sin(Math.atan(yp));
+    };
+    const pts: Point[] = [{ x: 0, y: getCableY(0, 0, input.riderMass), v: 0, t: 0 }];
+    let x = 0, v = 0, t = 0, dt = 0.005, iter = 0;
+    while (x < span && iter < 100000) {
+      iter++;
+      const k1v = getAccelIdeal(x); const k1x = Math.max(v, 0);
+      const k2v = getAccelIdeal(x + 0.5 * dt * k1x); const k2x = Math.max(v + 0.5 * dt * k1v, 0);
+      const k3v = getAccelIdeal(x + 0.5 * dt * k2x); const k3x = Math.max(v + 0.5 * dt * k2v, 0);
+      const k4v = getAccelIdeal(x + dt * k3x); const k4x = Math.max(v + dt * k3v, 0);
+      v = Math.max(v + (dt / 6) * (k1v + 2 * k2v + 2 * k3v + k4v), 0);
+      x = Math.max(x + (dt / 6) * (k1x + 2 * k2x + 2 * k3x + k4x), x);
+      t += dt;
+      const lp = pts[pts.length - 1];
+      if (x - lp.x >= (span / 300) || x >= span) pts.push({ x: Math.min(x, span), y: getCableY(Math.min(x, span), Math.min(x, span), input.riderMass), v, t });
+    }
+    return pts;
+  })();
+
   const maxV = Math.max(...travelProfile.map(p => p.v || 0));
   const maxVNW = Math.max(...ptsNW.map(p => p.v || 0));
   const finishV = travelProfile[travelProfile.length - 1].stopped ? 0 : (travelProfile[travelProfile.length - 1].v || 0);
@@ -457,72 +389,35 @@ al(x + dt * k3x); const k4x = Math.max(v + dt * k3v, 0);
   let totalTime = travelProfile[travelProfile.length - 1].t || 0;
   let totalTimeNoWind = ptsNW[ptsNW.length - 1].t || 0;
   
-  // Average speed calculation (weighted by distance)
-  let distSum = 0;
-  let vdSum = 0;
+  let distSum = 0, vdSum = 0;
   for (let i = 0; i < travelProfile.length - 1; i++) {
     const dxi = travelProfile[i + 1].x - travelProfile[i].x;
     const vAvg = ((travelProfile[i].v || 0) + (travelProfile[i + 1].v || 0)) / 2;
-    distSum += dxi;
-    vdSum += vAvg * dxi;
+    distSum += dxi; vdSum += vAvg * dxi;
   }
   const avgSpeed = distSum > 0 ? vdSum / distSum : 0;
 
-  // Position of max speed
   let maxVx = 0;
-  for (const p of travelProfile) {
-    if ((p.v || 0) >= maxV - 0.01) {
-      maxVx = p.x;
-      break;
-    }
-  }
+  for (const p of travelProfile) { if ((p.v || 0) >= maxV - 0.01) { maxVx = p.x; break; } }
 
-  // Calculate anchor forces (using standard vector mechanics of loaded cables)
   const Rh = adjustedTensionNewtons;
-  // Slopes at anchors with load at loadPositionX
   const slopeStart = getCableSlope(0.01, input.loadPositionX, input.riderMass);
   const slopeEnd = getCableSlope(span - 0.01, input.loadPositionX, input.riderMass);
   const angleStart = Math.atan(slopeStart);
   const angleEnd = Math.atan(-slopeEnd);
 
   const reactions = {
-    start: {
-      horizontal: Rh / g,
-      vertical: Math.abs(Rh * Math.tan(angleStart)) / g
-    },
-    end: {
-      horizontal: Rh / g,
-      vertical: Math.abs(Rh * Math.tan(angleEnd)) / g
-    }
+    start: { horizontal: Rh / g, vertical: Math.abs(Rh * Math.tan(angleStart)) / g },
+    end: { horizontal: Rh / g, vertical: Math.abs(Rh * Math.tan(angleEnd)) / g }
   };
 
-  const maxTensionNewtons = Math.max(
-    Rh / Math.cos(angleStart),
-    Rh / Math.cos(angleEnd)
-  );
-
+  const maxTensionNewtons = Math.max(Rh / Math.cos(angleStart), Rh / Math.cos(angleEnd));
   const safetyFactor = (input.ropeBreakingLoadKn * 1000) / Math.max(maxTensionNewtons, 1);
 
   return {
-    points,
-    unloadedPoints,
-    travelProfile,
-    ptsNW,
-    ptsW40,
-    ptsW120,
-    ptsAero,
-    ptsIdeal,
-    reactions,
-    maxTensionNewtons,
-    safetyFactor,
-    cableLength,
-    maxSpeed: maxV,
-    maxSpeedNoWind: maxVNW,
-    finishSpeed: finishV,
-    finishSpeedNoWind: finishVNW,
-    avgSpeed,
-    totalTime,
-    totalTimeNoWind,
-    maxVx
+    points, unloadedPoints, travelProfile, ptsNW, ptsW40, ptsW120, ptsAero, ptsIdeal,
+    reactions, maxTensionNewtons, safetyFactor, cableLength,
+    maxSpeed: maxV, maxSpeedNoWind: maxVNW, finishSpeed: finishV, finishSpeedNoWind: finishVNW,
+    avgSpeed, totalTime, totalTimeNoWind, maxVx
   };
 };
