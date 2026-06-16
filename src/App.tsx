@@ -333,6 +333,8 @@ const translations = {
   }
 };
 
+const APP_VERSION = "2.1.0";
+
 export default function App() {
   const [lang, setLang] = useState<Language>('ru');
   const t = translations[lang];
@@ -1714,6 +1716,12 @@ function StatCard({ label, value, highlight, isDanger }: { label: string, value:
   );
 }
 assName={`text-xl font-bold font-mono tracking-tight mt-1.5 ${highlight ? (isDanger ? 'text-red-600' : 'text-brand-blue') : 'text-slate-800'}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+ont-bold font-mono tracking-tight mt-1.5 ${highlight ? (isDanger ? 'text-red-600' : 'text-brand-blue') : 'text-slate-800'}`}>
         {value}
       </p>
     </div>
