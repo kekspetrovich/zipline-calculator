@@ -175,11 +175,13 @@ export const simulateZipline = (input: ZiplineInput): ZiplineResults => {
     };
   }
 
-  // Adjust pre-tension for temperature (standard thermal expansion)
-  const alpha = 12e-6; // steel thermal expansion coeff
+  // Adjust pre-tension for temperature (standard thermal expansion of steel)
+  // α = 12e-6 /°C for steel; ΔT = deviation from 20°C installation reference
+  // Strain ε = α * ΔT → tension reduced if warmer (cable expands → sags more)
+  const alpha = 12e-6;
   const tRef = 20;
   const deltaT = input.temperature - tRef;
-  const adjustedTensionNewtons = (input.tensionKg * g) * (1 - alpha * deltaT * 100);
+  const adjustedTensionNewtons = (input.tensionKg * g) * (1 - alpha * deltaT * span);
 
   const q = input.ropeWeight * g;
   const rho = calculateAirDensity(input.altitude, input.temperature, input.humidity);

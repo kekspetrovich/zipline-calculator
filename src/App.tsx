@@ -477,7 +477,7 @@ export default function App() {
     }
   };
 
-  // Compass mouse helper
+  // Compass interaction helpers
   const handleCompassMove = (clientX: number, clientY: number) => {
     if (!compassRef.current) return;
     const rect = compassRef.current.getBoundingClientRect();
@@ -496,18 +496,31 @@ export default function App() {
     handleCompassMove(e.clientX, e.clientY);
   };
 
+  const handleCompassTouchStart = (e: React.TouchEvent) => {
+    e.preventDefault();
+    setDraggingWind(true);
+    handleCompassMove(e.touches[0].clientX, e.touches[0].clientY);
+  };
+
   useEffect(() => {
     const handleGlobalMouseUp = () => setDraggingWind(false);
     const handleGlobalMouseMove = (e: MouseEvent) => {
-      if (draggingWind) {
-        handleCompassMove(e.clientX, e.clientY);
-      }
+      if (draggingWind) handleCompassMove(e.clientX, e.clientY);
     };
+    const handleGlobalTouchMove = (e: TouchEvent) => {
+      if (draggingWind && e.touches[0]) handleCompassMove(e.touches[0].clientX, e.touches[0].clientY);
+    };
+    const handleGlobalTouchEnd = () => setDraggingWind(false);
+
     window.addEventListener('mouseup', handleGlobalMouseUp);
     window.addEventListener('mousemove', handleGlobalMouseMove);
+    window.addEventListener('touchmove', handleGlobalTouchMove, { passive: true });
+    window.addEventListener('touchend', handleGlobalTouchEnd);
     return () => {
       window.removeEventListener('mouseup', handleGlobalMouseUp);
       window.removeEventListener('mousemove', handleGlobalMouseMove);
+      window.removeEventListener('touchmove', handleGlobalTouchMove);
+      window.removeEventListener('touchend', handleGlobalTouchEnd);
     };
   }, [draggingWind]);
 
@@ -560,7 +573,9 @@ export default function App() {
   const maxVkmh = useMemo(() => {
     const values = [
       ...results.travelProfile.map(p => (p.v || 0) * 3.6),
-      ...results.ptsNW.map(p => (p.v || 0) * 3.6)
+      ...results.ptsNW.map(p => (p.v || 0) * 3.6),
+      ...results.ptsAero.map(p => (p.v || 0) * 3.6),
+      ...results.ptsIdeal.map(p => (p.v || 0) * 3.6),
     ];
     return Math.ceil(Math.max(...values, 10) / 10) * 10;
   }, [results]);
@@ -570,6 +585,8 @@ export default function App() {
 
   const speedWithWindPath = speedLineGen(results.travelProfile);
   const speedNoWindPath = speedLineGen(results.ptsNW);
+  const speedAeroPath = speedLineGen(results.ptsAero);
+  const speedIdealPath = speedLineGen(results.ptsIdeal);
 
   // Mass charts logic
   const maxMassVkmh = useMemo(() => {
@@ -998,7 +1015,9 @@ export default function App() {
                         ref={compassRef} 
                         viewBox="0 0 180 180" 
                         onMouseDown={handleCompassMouseDown}
+                        onTouchStart={handleCompassTouchStart}
                         className="w-full h-full cursor-crosshair"
+                        style={{ touchAction: 'none' }}
                       >
                         <circle cx="90" cy="90" r="80" fill="#FFFFFF" stroke="#E2E8F0" strokeWidth="2" />
                         <circle cx="90" cy="90" r="70" fill="none" stroke="#F1F5F9" strokeWidth="1" strokeDasharray="3,3" />
@@ -1596,11 +1615,11 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div>
                         <span className="text-[9px] text-slate-400 uppercase">{t.horiz}</span>
-                        <p className="font-bold text-slate-700">{results.reactions.start.horizontal.toFixed(0)} кг</p>
+                        <p className="font-bold text-slate-700">{results.reactions.start.horizontal.toFixed(0)} {t.kg}</p>
                       </div>
                       <div>
                         <span className="text-[9px] text-slate-400 uppercase">{t.vert}</span>
-                        <p className="font-bold text-slate-700">{results.reactions.start.vertical.toFixed(0)} кг</p>
+                        <p className="font-bold text-slate-700">{results.reactions.start.vertical.toFixed(0)} {t.kg}</p>
                       </div>
                     </div>
                   </div>
@@ -1611,12 +1630,13 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div>
                         <span className="text-[9px] text-slate-400 uppercase">{t.horiz}</span>
-                        <p className="font-bold text-slate-700">{results.reactions.end.horizontal.toFixed(0)} кг</p>
+                        <p className="font-bold text-slate-700">{results.reactions.end.horizontal.toFixed(0)} {t.kg}</p>
                       </div>
                       <div>
                         <span className="text-[9px] text-slate-400 uppercase">{t.vert}</span>
-                        <p className="font-bold text-slate-700">{results.reactions.end.vertical.toFixed(0)} кг</p>
+                        <p className="font-bold text-slate-700">{results.reactions.end.vertical.toFixed(0)} {t.kg}</p>
                       </div>
+
                     </div>
                   </div>
                 </div>
